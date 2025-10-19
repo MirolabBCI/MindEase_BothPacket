@@ -5,7 +5,7 @@ Reads EEG data over Bluetooth Low Energy (BLE) from two channels (Left/Right ear
 - **Language:** Python 3.9  
 - **Output:** `eeg_data.txt` (appends) with header `Left Ear,Right Ear`  
 - **Contact:** hesamdc7613@gmail.com  
-- **GitHub:** <ADD_YOUR_USERNAME_HERE> (replace with your username)
+- **GitHub:** Hesamdc
 
 ---
 
