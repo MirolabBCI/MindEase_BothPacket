@@ -164,25 +164,25 @@ Written 300 lines
 ## 🪄 Flow Summary
 
 ┌─────────────────────────────┐
-│ Start Program               │
+│ Start Program│
 ├─────────────────────────────┤
-│ Initialize Queues           │
-│ Create BLEDevice instance   │ 
+│ Initialize Queues│
+│ Create BLEDevice instance│ 
 ├─────────────────────────────┤
-│ Connect via BleakClient     │
-│ Subscribe to Notifications  │
+│ Connect via BleakClient│
+│ Subscribe to Notifications│
 ├─────────────────────────────┤
-│ Receive EEG Packets         │
-│ Parse → Convert → Queue     │
+│ Receive EEG Packets│
+│ Parse → Convert → Queue│
 ├─────────────────────────────┤
-│ Async Task 1: BLE Receiver  │
-│ Async Task 2: File Writer   │
+│ Async Task 1: BLE Receiver│
+│ Async Task 2: File Writer│
 ├─────────────────────────────┤
-│ Sync Left & Right Channels  │
-│ Write to eeg_data.txt       │
+│ Sync Left & Right Channels│
+│ Write to eeg_data.txt│
 ├─────────────────────────────┤
-│ KeyboardInterrupt → Flush   │
-│ Close File & Exit           │
+│ KeyboardInterrupt → Flush│
+│ Close File & Exit│
 └─────────────────────────────┘
 
 ---
