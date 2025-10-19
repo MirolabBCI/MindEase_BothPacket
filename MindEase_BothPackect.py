@@ -3,7 +3,7 @@
 """
 MindEase_BothPackect
 ------------------------------------------------------------
-Python 3.8
+Python 3.9
 
 Description:
     Reads EEG data over BLE (two channels: Left/Right ear) using bleak,
