@@ -40,7 +40,7 @@ Notes:
 
 Author Contact:
     Email: hesamdc7613@gmail.com
-    GitHub: <ADD_YOUR_USERNAME_HERE>
+    GitHub: Hesamdc
 """
 
 import asyncio
