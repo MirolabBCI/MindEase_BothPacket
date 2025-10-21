@@ -48,9 +48,10 @@ import time
 import queue
 from bleak import BleakClient
 import ctypes
-from datetime import datetime  # kept as in original
+from datetime import datetime 
 import logging
 
+# --- Minimal logging (info + connection errors) ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,13 @@ class BLEDevice:
         self.filename_prefix = filename_prefix
         self.uuid_to_name = {v: k for k, v in uuids.items()}
 
-        # New storage for meditation & attention
-        self.med_att_values = {uuid: {"med": None, "att": None, "quality": None} for uuid in uuids.values()}
+        # Store latest long-packet fields for each uuid
+        self.med_att_values = {
+            uuid: {"med": None, "att": None, "quality": None} for uuid in uuids.values()
+        }
+
+        # Meditation history for plotting (all history, per uuid)
+        self.med_history = {uuid: {"t": [], "v": []} for uuid in uuids.values()}
 
     def process_short_packet(self, uuid, packet):
         if len(packet) < 8:
@@ -87,6 +93,7 @@ class BLEDevice:
         hex_packet = ' '.join(f'{byte:02X}' for byte in packet)
         self.packet_counts[uuid] += 1
         self.total_packets[uuid] += 1
+        # short_signal_quality extracted but not printed (kept intact)
         short_signal_quality = int(hex_packet[15:17], 16)
         high_byte = int(hex_packet[18:20], 16)
         low_byte = int(hex_packet[21:23], 16)
@@ -97,6 +104,7 @@ class BLEDevice:
         self.data_queues[uuid].put((time.time(), raw_value_microvolts))
 
     def process_long_packet(self, uuid, packet):
+        """Update meditation/attention/quality; printing is deferred to once-per-second status line."""
         try:
             hex_packet = ' '.join(f'{byte:02X}' for byte in packet)
             meditation_hex = hex_packet[96:98]
@@ -107,25 +115,37 @@ class BLEDevice:
             attention = int(attention_hex, 16)
             long_signal_quality = int(long_signal_quality_hex, 16)
 
-            # Store values
             self.med_att_values[uuid]["med"] = meditation
             self.med_att_values[uuid]["att"] = attention
             self.med_att_values[uuid]["quality"] = long_signal_quality
 
-            # ✅ Updated print
-            print(f"[{self.uuid_to_name[uuid]}] Signal Quality: {long_signal_quality} | Meditation: {meditation} | Attention: {attention}")
+            # Append meditation to history for plotting
+            now = time.time()
+            self.med_history[uuid]["t"].append(now)
+            self.med_history[uuid]["v"].append(meditation)
 
         except Exception as e:
             logger.error(f"Error processing long packet: {e}")
 
+    def _format_status_line(self, uuid, sampling_rate):
+        name = self.uuid_to_name[uuid]
+        med = self.med_att_values[uuid]["med"]
+        att = self.med_att_values[uuid]["att"]
+        qual = self.med_att_values[uuid]["quality"]
+        med_str = str(med) if med is not None else "N/A"
+        att_str = str(att) if att is not None else "N/A"
+        qual_str = str(qual) if qual is not None else "N/A"
+        ts = time.strftime("%H:%M:%S", time.localtime())
+        return f"{name:9} | {sampling_rate:.2f} Hz | SQ: {qual_str} | Med: {med_str} | Att: {att_str} | Time: {ts}"
+
     def calculate_signal_quality(self, uuid):
+        """Called whenever notifications arrive; prints one clean line per ear per second."""
         current_time = time.time()
         elapsed_time = current_time - self.start_times[uuid]
         if elapsed_time >= 1.0:
             sampling_rate = self.packet_counts[uuid] / elapsed_time
             if self.first_second_skipped[uuid]:
-                channel_name = self.uuid_to_name[uuid]
-                print(f"{channel_name} {sampling_rate:.2f} Hz (Total: {self.total_packets[uuid]})")
+                print(self._format_status_line(uuid, sampling_rate))
             else:
                 self.first_second_skipped[uuid] = True
             self.packet_counts[uuid] = 0
@@ -152,6 +172,7 @@ class BLEDevice:
                     else:
                         break
                 else:
+                    # Unknown type; advance one byte to resync
                     self.buffers[uuid] = self.buffers[uuid][start_index + 1:]
             else:
                 break
@@ -164,11 +185,15 @@ class BLEDevice:
                 async with BleakClient(self.address) as client:
                     print(f"Connected to {self.address}")
                     for ear, uuid in self.uuids.items():
-                        await client.start_notify(uuid, lambda s, d, u=uuid: asyncio.create_task(self.notification_handler(u, s, d)))
+                        await client.start_notify(
+                            uuid,
+                            lambda s, d, u=uuid: asyncio.create_task(self.notification_handler(u, s, d))
+                        )
                     while True:
                         await asyncio.sleep(1)
             except Exception as e:
                 retry_attempts -= 1
+                logger.error(f"Connection error: {e}. Retries left: {retry_attempts}")
                 print(f"Retrying connection... ({retry_attempts} attempts left)")
                 await asyncio.sleep(5)
 
@@ -207,6 +232,99 @@ async def save_data_to_file(data_queues, file_handle):
         await asyncio.sleep(0)
 
 
+# -------- Live Meditation Plot (simple line, always-on-top, main thread) -------- #
+
+async def plot_meditation_live(ble_device: BLEDevice):
+    # Ensure GUI backend and import in main thread
+    try:
+        import matplotlib
+        try:
+            matplotlib.use("TkAgg", force=True)
+        except Exception:
+            pass
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"[Plot] matplotlib not available ({e}). Skipping live plot.")
+        # Keep this task alive without disrupting others
+        while True:
+            await asyncio.sleep(3600)
+
+    plt.ion()
+    fig, ax = plt.subplots()
+    ax.set_title("Live Meditation")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Meditation (0-100)")
+    ax.set_ylim(0, 100)
+
+    lines = {}
+    for ear_name, uuid in ble_device.uuids.items():
+        (line,) = ax.plot([], [], label=ear_name)
+        lines[uuid] = line
+    ax.legend(loc="upper right")
+
+    # Try to keep window always on top (best-effort)
+    try:
+        mng = plt.get_current_fig_manager()
+        try:
+            mng.window.attributes("-topmost", 1)  # TkAgg
+        except Exception:
+            try:
+                mng.window.raise_()
+                mng.window.activateWindow()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Show non-blocking
+    try:
+        plt.show(block=False)
+    except Exception:
+        pass
+
+    t0 = time.time()
+
+    while True:
+        updated_any = False
+        for uuid, line in lines.items():
+            ts = ble_device.med_history[uuid]["t"]
+            vs = ble_device.med_history[uuid]["v"]
+            if ts:
+                t_rel = [t - t0 for t in ts]
+                line.set_data(t_rel, vs)
+                updated_any = True
+
+        if updated_any:
+            ax.relim()
+            # Autoscale X only; keep Y fixed [0,100]
+            xmax = 10.0
+            for uuid in lines:
+                ts = ble_device.med_history[uuid]["t"]
+                if ts:
+                    xmax = max(xmax, ts[-1] - t0)
+            ax.set_xlim(0, xmax)
+
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
+
+            # Keep on top (periodic nudge)
+            try:
+                fig.canvas.manager.window.attributes("-topmost", 1)
+            except Exception:
+                pass
+
+        # Small pause so GUI stays responsive
+        try:
+            import matplotlib.pyplot as plt  # safe reimport
+            plt.pause(0.05)
+        except Exception:
+            pass
+
+        await asyncio.sleep(0.1)
+
+
+# ------------------------------- Main Orchestration --------------------------- #
+
 async def main():
     data_queues = {uuid: queue.Queue() for uuid in UUIDS.values()}
     ble_device = BLEDevice(DEVICE_ADDRESS, UUIDS, data_queues, "1")
@@ -215,7 +333,9 @@ async def main():
         try:
             await asyncio.gather(
                 ble_device.read_data_from_device(),
-                save_data_to_file(data_queues, file_handle)
+                save_data_to_file(data_queues, file_handle),
+                # Run plotting task in the main thread/event loop (no extra threads)
+                plot_meditation_live(ble_device),
             )
         except KeyboardInterrupt:
             print("Shutting down, flushing remaining data...")
